@@ -23,6 +23,7 @@ import * as db from "../database";
 import {AbstractNotification} from "../Notifications/AbstractNotification";
 import Notification from "../Notifications/Notification";
 import {Wizard, WizardData} from "./widgets/Wizard";
+import {serverConfig as startConfig} from "../../configLocal";
 
 export type ConfigTab = "tabGeneral" | "tabTrading" | "tabTradingDev";
 const CONFIG_TABS: ConfigTab[] = ["tabGeneral", "tabTrading", "tabTradingDev"];
@@ -53,9 +54,13 @@ export interface ExchangePairMap {
 export interface NotificationKey {
     //key: string;
     receiver?: string;
+    channel?: string;
 }
 export interface NotificationMethodMap {
     [notificationMethod: string]: NotificationKey;
+}
+export interface NotificationLinkMap {
+    [notificationMethod: string]: string;
 }
 export interface DisplayCurrencyMap {
     [tickerName: string]: string;
@@ -95,6 +100,8 @@ export interface ConfigRes extends ConfigData {
     wizardStrategies?: string[];
     wizardCandleSizes?: string[];
     notifications?: NotificationMethodMap;
+    notificationAppLinks?: NotificationLinkMap;
+    notificationMethod?: string;
     currencies?: DisplayCurrencyMap;
 
     changed?: boolean;
@@ -229,6 +236,12 @@ export class ConfigEditor extends AppPublisher {
             configFiles = files;
             return this.readConfigFile(this.selectedConfig)
         }).then((configFileData) => {
+            let validConfigFile = this.validateConfigArray(configFileData); // TODO how does this error happen on restart? external/manual edit?
+            if (validConfigFile)
+                configFileData = utils.stringifyBeautiful(validConfigFile);
+            else
+                logger.error("Invalid config file %s on initial client data", this.selectedConfig);
+
             this.send(clientSocket, {
                 tradingModes: BotTrade.TRADING_MODES,
                 configFiles: configFiles,
@@ -256,7 +269,9 @@ export class ConfigEditor extends AppPublisher {
                 exchangePairs: Currency.ExchangeRecommendedPairs.toObject(),
                 wizardStrategies: nconf.get("serverConfig:wizardStrategies"),
                 wizardCandleSizes: nconf.get("serverConfig:wizardCandleSizes"),
-                notifications: this.getNotificationMethods()
+                notifications: this.getNotificationMethods(),
+                notificationAppLinks: serverConfig.NotificationMethodLinks.toObject(),
+                notificationMethod: nconf.get("serverConfig:notificationMethod")
             });
             this.setLastWorkingConfig();
             if (nconf.get("serverConfig:configReset") === true)
@@ -283,6 +298,9 @@ export class ConfigEditor extends AppPublisher {
         }
         else if (typeof data.deleteConfig === "string") {
             this.removeConfigFile(data.deleteConfig).then(() => {
+                if (TradeConfig.isUserConfig(data.deleteConfig) === true) // if it's a default config we will restor it with original values on restart
+                    return this.removeConfigFile(data.deleteConfig, true);
+            }).then(() => {
                 this.send(clientSocket, {saved: true})
             }).catch((err) => {
                 logger.error("Error deleting config file", err)
@@ -404,11 +422,11 @@ export class ConfigEditor extends AppPublisher {
             const previousNotficiationSetting = JSON.stringify(nconf.get("serverConfig:apiKey:notify"));
             for (let method in data.saveNotification)
             {
-                if (Currency.NotificationMethods.has(method) === false) {
+                if (serverConfig.NotificationMethodLinks.has(method) === false) {
                     logger.error("Can not update unknown notification method %s", method);
                     continue;
                 }
-                let currentKey = nconf.get("serverConfig:apiKey:notify:" + method);
+                let currentKey = nconf.get("serverConfig:apiKey:notify:" + method) || startConfig.apiKey.notify[method];
                 let props = Object.keys(data.saveNotification[method]);
                 props.forEach((prop ) => {
                     if (currentKey[prop] === undefined)
@@ -418,6 +436,7 @@ export class ConfigEditor extends AppPublisher {
                     currentKey[prop] = data.saveNotification[method][prop];
                 });
                 nconf.set("serverConfig:apiKey:notify:" + method, currentKey);
+                nconf.set("serverConfig:notificationMethod", method);
                 serverConfig.saveConfigLocal();
             }
             if (JSON.stringify(nconf.get("serverConfig:apiKey:notify")) !== previousNotficiationSetting) {
@@ -651,6 +670,14 @@ export class ConfigEditor extends AppPublisher {
         return utils.stringifyBeautiful(json);
     }
 
+    /**
+     * Return the fixed JSON if it can be repaired or null otherwise.
+     * @param json
+     */
+    protected canFixInvalidConfigJson(json: any): any {
+        return json;
+    }
+
     protected ensureCurrencyPairString(pair: any): string {
         if (typeof pair === "string")
             return pair;
@@ -699,9 +726,9 @@ export class ConfigEditor extends AppPublisher {
         })
     }
 
-    protected removeConfigFile(name: string) {
+    protected removeConfigFile(name: string, removeBackupOnly = false) {
         return new Promise<void>((resolve, reject) => {
-            const configFile = path.join(ConfigEditor.getConfigDir(), name)
+            const configFile = path.join(TradeConfig.getConfigDir(removeBackupOnly === true), name);
             if (!utils.file.isSafePath(configFile))
                 return reject({txt: "Can not access path outside of app dir"})
             fs.unlink(configFile, (err) => {
@@ -720,7 +747,7 @@ export class ConfigEditor extends AppPublisher {
                 if (err)
                     return reject({txt: "Error copying config file", err: err});
                 let existingConfigs = nconf.get("serverConfig:userConfigs") || [];
-                if (existingConfigs.indexOf(nameNew) !== -1) {
+                if (existingConfigs.indexOf(nameNew) === -1) {
                     existingConfigs.push(nameNew);
                     nconf.set("serverConfig:userConfigs", existingConfigs);
                     serverConfig.saveConfigLocal();
@@ -1178,7 +1205,7 @@ export class ConfigEditor extends AppPublisher {
         }
         let jsonData = utils.parseJson(configFileData);
         if (jsonData === null || !jsonData.data || Array.isArray(jsonData.data) === false || jsonData.data.length === 0) {
-            logger.error("Error loading config file data from disk")
+            logger.error("Error loading config file data from disk", jsonData)
             return data;
         }
         let properties = this.createSchemaProperties(jsonData.data[0])
@@ -1340,11 +1367,16 @@ export class ConfigEditor extends AppPublisher {
             if ((notifyKeys[method] as any).appToken) // Pushover appToken can not be changed
                 delete (notifyKeys[method] as any).appToken;
         }
+        for (let method in startConfig.apiKey.notify) // add missing default values (empty)
+        {
+            if (notifyKeys[method] === undefined)
+                notifyKeys[method] = startConfig.apiKey.notify[method];
+        }
         return notifyKeys;
     }
 
     protected sendTestNotification(title: string, text: string) {
-        let notifier = AbstractNotification.getInstance();
+        let notifier = AbstractNotification.getInstance(); // TODO should be sent after restart if user changes notification method
         let headline = utils.sprintf(title, nconf.get("projectNameLong"));
         let notification = new Notification(headline, text, false);
         notifier.send(notification).then(() => {
@@ -1373,6 +1405,11 @@ export class ConfigEditor extends AppPublisher {
      * @param clientConfig
      */
     protected validateConfigArray(clientConfig: any): any {
+        if (typeof clientConfig === "string") {
+            clientConfig = utils.parseJson(clientConfig);
+            if (clientConfig === null)
+                return null;
+        }
         let configObj: any = clientConfig;
         if (configObj.data === undefined || Array.isArray(configObj.data) === false) {
             configObj = {

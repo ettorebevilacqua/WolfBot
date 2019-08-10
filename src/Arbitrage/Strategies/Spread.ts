@@ -13,7 +13,9 @@ interface SpreadAction extends ArbitrageStrategyAction {
     spreadEntry: number; // 0.8% // How many % the market spread between the 2 exchanges has to be to open positions on both of them.
     spreadTarget: number; // 0.5% // Targeted profit in %. This takes trading fees into account. See the 'tradingFees' setting.
     // Positions will be closed according to this equation: spreadExit = spreadEntry - 4*fees - spreadTarget -> will usually negative, meaning prices flipped
-    trailingSpreadStop: number; // 0.08% // After reaching spreadTarget, place a trailing stop to exit the market. Set this to 0 to exit immediately,
+    trailingSpreadStop: number; // 0.08% // After reaching spreadTarget, place a trailing stop to exit the market. Set this to 0 to exit immediately.
+    statelessArbitrage: boolean; // optional, default false. Use only 1 trade per exchange (buy on the lower, sell on the higher) and don't keep an open margin position until the spread decreases.
+    // Enabling this setting means configuration such as 'trailingSpreadStop' will be ignored since there are no trades to close the open arbitrage position.
 }
 
 /**
@@ -32,11 +34,17 @@ export default class Spread extends AbstractArbitrageStrategy {
     protected action: SpreadAction;
     protected spreadTargetReached = false;
     protected trailingStopSpread = 0.0;
+    protected spread: MaxSpreadCandles = null;
 
     constructor(options) {
         super(options)
         this.addInfo("spreadTargetReached", "spreadTargetReached");
         this.addInfo("trailingStopSpread", "trailingStopSpread");
+        this.addInfoFunction("spread", () => {
+            if (this.spread === null)
+                return 0.0;
+            return this.spread.getSpreadPercentage();
+        })
     }
 
     public getArbitrageRate(arbitrageTrade: ArbitrageTrade): number {
@@ -92,13 +100,13 @@ export default class Spread extends AbstractArbitrageStrategy {
     }
 
     protected checkOpenArbitrage(candles: ExchangeCandles) {
-        let spread = this.calcMaxSpread(candles);
-        if (spread.getSpreadPercentage() > this.action.spreadEntry) {
-            this.log(utils.sprintf("Performing arbitrage at spread percentage at %s%%", spread.getSpreadPercentage().toFixed(2)));
-            this.performArbitrage(spread.getMinCandle().exchange, spread.getMaxCandle().exchange, spread.getMinCandle().close, spread.getMaxCandle().close);
+        this.spread = this.calcMaxSpread(candles);
+        if (this.spread.getSpreadPercentage() > this.action.spreadEntry) {
+            this.log(utils.sprintf("Performing arbitrage at spread percentage at %s%%", this.spread.getSpreadPercentage().toFixed(2)));
+            this.performArbitrage(this.spread.getMinCandle().exchange, this.spread.getMaxCandle().exchange, this.spread.getMinCandle().close, this.spread.getMaxCandle().close);
         }
         else
-            this.log(utils.sprintf("Spread percentage at %s%% is too low for arbitrage", spread.getSpreadPercentage().toFixed(2)));
+            this.log(utils.sprintf("Spread percentage at %s%% is too low for arbitrage", this.spread.getSpreadPercentage().toFixed(2)));
     }
 
     protected checkExitArbitrage(candles: ExchangeCandles) {

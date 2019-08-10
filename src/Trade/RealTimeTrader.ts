@@ -63,11 +63,13 @@ export default class RealTimeTrader extends PortfolioTrader {
             {
                 if (this.config.exchanges.indexOf(ex[0]) === -1)
                     continue;
-                let exchange = ex[1];
-                let orderBook = exchange.getOrderBook().get(coinPair.toString())
+                let curExchange = ex[1];
+                if (exchange !== Currency.Exchange.ALL && curExchange.getExchangeLabel() !== exchange)
+                    continue;
+                let orderBook = curExchange.getOrderBook().get(coinPair.toString())
                 if (!orderBook) {
                     orderbooksReady = false;
-                    logger.warn("Skipping trade because %s orderbook is not ready", exchange.getClassName());
+                    logger.warn("Skipping trade because %s orderbook is not ready", curExchange.getClassName());
                     break;
                 }
             }
@@ -75,11 +77,13 @@ export default class RealTimeTrader extends PortfolioTrader {
         else {
             for (let balance of PortfolioTrader.coinBalances)
             {
-                let exchange = this.exchanges.get(balance[0]);
-                let orderBook = exchange.getOrderBook().get(coinPair.toString())
+                let curExchange = this.exchanges.get(balance[0]);
+                if (exchange !== Currency.Exchange.ALL && curExchange.getExchangeLabel() !== exchange)
+                    continue;
+                let orderBook = curExchange.getOrderBook().get(coinPair.toString())
                 if (!orderBook) {
                     orderbooksReady = false;
-                    logger.warn("Skipping trade because %s orderbook is not ready", exchange.getClassName());
+                    logger.warn("Skipping trade because %s orderbook is not ready", curExchange.getClassName());
                     break;
                 }
             }
@@ -143,6 +147,7 @@ export default class RealTimeTrader extends PortfolioTrader {
                         else
                             rate = orderBook.getLast() + orderBook.getLast() / 100 * nconf.get('serverConfig:maxPriceDiffPercent') // TODO or should we use bid/ask?
                     }
+                    rate = this.ensureValidRate(rate, "buy", exchange, strategy);
                     const buyAmount = this.getMaxCoinAmount(exchange, strategy, buyBtc / rate, "buy");
                     if (this.tradeMode === RealTimeTradeMode.SIMULATION) {
                         orderOps.push(new Promise((resolve, reject) => {
@@ -214,6 +219,7 @@ export default class RealTimeTrader extends PortfolioTrader {
                         else
                             rate = orderBook.getLast() + orderBook.getLast() / 100 * nconf.get('serverConfig:maxPriceDiffPercent')
                     }
+                    rate = this.ensureValidRate(rate, "buy", exchange, strategy);
                     // TODO check actual tradable balance on exchange and store it in map in advance (for faster real time trading)
                     const buyAmount = this.getMaxCoinAmount(exchange, strategy, buyBtc / rate, "buy");
                     if (this.tradeMode === RealTimeTradeMode.SIMULATION) {
@@ -297,6 +303,7 @@ export default class RealTimeTrader extends PortfolioTrader {
                         else
                             rate = orderBook.getLast() - orderBook.getLast() / 100 * nconf.get('serverConfig:maxPriceDiffPercent')
                     }
+                    rate = this.ensureValidRate(rate, "sell", exchange, strategy);
                     const sellAmount = this.getMaxCoinAmount(exchange, strategy, sellBtc / rate, "sell");
                     if (this.tradeMode === RealTimeTradeMode.SIMULATION) {
                         orderOps.push(new Promise((resolve, reject) => {
@@ -368,6 +375,7 @@ export default class RealTimeTrader extends PortfolioTrader {
                         else
                             rate = orderBook.getLast() - orderBook.getLast() / 100 * nconf.get('serverConfig:maxPriceDiffPercent')
                     }
+                    rate = this.ensureValidRate(rate, "sell", exchange, strategy);
 
                     if (curBalance * orderBook.getLast() > this.getMaxSellBtc())
                         curBalance = this.getMaxSellBtc() / orderBook.getLast();

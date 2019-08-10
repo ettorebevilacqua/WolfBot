@@ -4,7 +4,6 @@ const nconf = utils.nconf
 import * as db from'./database';
 const argv = require('minimist')(process.argv.slice(2));
 import AbstractController from './AbstractController';
-import NotificationController from './NotificationController';
 import ExchangeController from './ExchangeController';
 import TradeAdvisor from './TradeAdvisor';
 import {LendingAdvisor} from './Lending/LendingAdvisor';
@@ -32,7 +31,6 @@ import {JsonResponse} from "./Web/JsonResponse";
 
 export class Controller extends AbstractController { // TODO implement graceful shutdown api command (stop & delete tasks)
     protected exchangeConntroller: ExchangeController = null;
-    protected notificationController: NotificationController;
     protected tradeAdvisor: TradeAdvisor = null;
     protected lendingAdvisor: LendingAdvisor = null;
     protected socialController: SocialController = null;
@@ -57,7 +55,7 @@ export class Controller extends AbstractController { // TODO implement graceful 
             nconf.add('controllerDefaults', {type: 'literal', store: require(__dirname + '/../config.js').config})
 
         process.on('uncaughtException', (err) => {
-            if (!this.handleDatabaseConnectionError(err))
+            if (!this.handleDatabaseConnectionError(err) && !this.handleRestartException(err))
                 this.log('Uncaught Exception', err, err.stack)
         })
         process.on('unhandledRejection', (err) => {
@@ -260,10 +258,7 @@ export class Controller extends AbstractController { // TODO implement graceful 
             this.exchangeConntroller = new ExchangeController(argv.config);
         if (this.loginController === null)
             this.loginController = LoginController.getInstance();
-        this.notificationController = new NotificationController()
-        this.notificationController.process().then(() => {
-            return this.exchangeConntroller.process()
-        }).then(() => {
+        this.exchangeConntroller.process().then(() => {
             // all exchanges are loaded & connected
             // since all our actions are based on events from streams we would not need this process() function to act
             // but running it every 5 seconds and act from here "flattens" market spikes
@@ -316,6 +311,26 @@ export class Controller extends AbstractController { // TODO implement graceful 
             logger.error('Error reconnecting fore new IP address', err)
             process.exit(1) // now what? more debugging tools needed?
         })*/
+    }
+
+    public handleDatabaseConnectionError(err) {
+        if (!err || typeof err !== "object")
+            return false;
+        let message = ((err.message || "") + " " + (err.name || "")).toLocaleLowerCase(); // err.stack is too long
+        if (message && message.indexOf('mongoerror') !== -1 && (
+            message.indexOf('timed out') !== -1 || message.indexOf('slaveok=false') !== -1 || message.indexOf('topology was destroyed') !== -1 ||
+            message.indexOf('econnreset') !== -1)) {
+            // MongoError: connection 5 to localhost:27017 timed out
+            this.log('Database connection error', err, err.stack)
+            // we lost our database connection. our app might be in an undefined state.
+            // the safest thing we can do is wait a few sec and restart it
+            setTimeout(() => {
+                this.restart()
+                logger.error("Lost database connection")
+            }, 5000)
+            return true;
+        }
+        return false;
     }
 
     disconnect(cb) {
@@ -387,24 +402,17 @@ export class Controller extends AbstractController { // TODO implement graceful 
         // should we call loginController immediately with a force = true parameter?
     }
 
-    protected handleDatabaseConnectionError(err) {
+    protected handleRestartException(err) {
         if (!err || typeof err !== "object")
             return false;
-        let message = (err.message || "") + " " + (err.name || ""); // err.stack is too long
-        if (message && message.indexOf('MongoError') !== -1 && (
-            message.indexOf('timed out') !== -1 || message.indexOf('slaveOk=false') !== -1 || message.indexOf('Topology was destroyed') !== -1 ||
-            message.indexOf('ECONNRESET') !== -1)) {
-            // MongoError: connection 5 to localhost:27017 timed out
-            this.log('Database connection error', err, err.stack)
-            // we lost our database connection. our app might be in an undefined state.
-            // the safest thing we can do is wait a few sec and restart it
-            setTimeout(() => {
-                this.restart()
-                logger.error("Lost database connection")
-            }, 5000)
-            return true;
-        }
-        return false;
+        let message = ((err.message || "") + " " + (err.name || "")).toLocaleLowerCase(); // err.stack is too long
+        if (message.indexOf("listen eaddrinuse") === -1) // Error: listen EADDRINUSE: address already in use :::2096
+            return false;
+        logger.error("Another app is already running on the same port. Scheduling restart", err);
+        setTimeout(() => {
+            this.restart()
+        }, 2000)
+        return true;
     }
 
     protected setLastActive() {
