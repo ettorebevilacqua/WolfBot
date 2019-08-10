@@ -12,9 +12,9 @@
   "homepage": "https://wolfbot.org",
   "repository": "https://github.com/Ekliptor/WolfBot.git",
   "dependencies": {
-    "@ekliptor/apputils": "^0.1.5",
+    "@ekliptor/apputils": "^0.1.20",
     "@ekliptor/bintrees-local": "^1.0.6",
-    "@ekliptor/bit-models": "^1.0.35",
+    "@ekliptor/bit-models": "^1.0.64",
     "@ekliptor/bitfinex-api-node-seq": "^1.1.1",
     "@ekliptor/bitmex-realtime-api-fix": "^0.4.0",
     "@ekliptor/browserutils": "^0.0.3",
@@ -92,8 +92,11 @@
     "gulp": "^3.9.1",
     "gulp-typedoc": "^2.2.0",
     "source-map-loader": "^0.2.3",
+    "ts-node": "^8.3.0",
     "typedoc": "^0.11.1",
-    "typescript": "3.2.2"
+    "typescript": "3.2.2",
+    "winston": "^3.2.1",
+    "winston-mongodb": "^4.0.9"
   },
   "workspaces": [
     "packages/*"
